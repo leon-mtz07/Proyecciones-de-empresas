@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import date
 
-def monte_carlo(ticker: str, fecha_f = date.today(), N = 100000):
+# Creación de la función monte carlo que se utilizará para predecir el precio de una acción
+def monte_carlo(ticker: str, fecha_f = date.today(), N = 100000, tiempo : int = 22):
     """
     Se usará el modelo de montecarlo para tratar de predecir el precio de la acción específicada en el ticker
     :param ticker:
@@ -57,7 +58,7 @@ def monte_carlo(ticker: str, fecha_f = date.today(), N = 100000):
     expected_return = rf_daily * 252 + beta * (market_exp - rf_daily * 252)
 
     # Calculando el Monte Carlo
-    T = 22 / 252  # 22 días de trading
+    T = tiempo / 252  # 22 días de trading
 
     # Simulación GBM (méto-do exacto para S_T):
     Z = np.random.normal(0, 1, size=N)
