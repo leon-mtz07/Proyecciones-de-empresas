@@ -30,19 +30,19 @@ def monte_carlo(ticker: str, fecha_f = date.today(), N = 100000):
     vol_anual = vol_diaria * np.sqrt(252)
 
     # Calculamos el rendimiento esperado
-    # 1. Obtener precios históricos del S&P 500 (SPXUIV)
-    sp500 = obb.equity.price.historical("SPXUIV", start_date="2020-01-01", end_date="2025-09-30").to_df()
+    # 1. Obtener precios históricos del S&P 500 (VOO)
+    sp500 = obb.equity.price.historical("VOO", start_date="1900-01-01", end_date=fecha_f, provider="yfinance").to_df()
 
     # 2. Calcular rendimientos diarios logarítmicos
     df_stock["ret"] = np.log(df_stock["close"] / df_stock["close"].shift(1))
     sp500["ret"] = np.log(sp500["close"] / sp500["close"].shift(1))
 
     # 3. Alinear fechas
-    data = df_stock[["ret"]].join(sp500[["ret"]], lsuffix="_aapl", rsuffix="_mkt").dropna()
+    data = df_stock[["ret"]].join(sp500[["ret"]], lsuffix="_stock", rsuffix="_mkt").dropna()
 
     # 4. Estimar beta mediante regresión lineal (CAPM)
     X = sm.add_constant(data["ret_mkt"])  # variable independiente (mercado)
-    y = data["ret_aapl"]  # variable dependiente (activo)
+    y = data["ret_stock"]  # variable dependiente (activo)
 
     model = sm.OLS(y, X).fit()
     alpha, beta = model.params
@@ -53,7 +53,7 @@ def monte_carlo(ticker: str, fecha_f = date.today(), N = 100000):
     # Rendimiento esperado del mercado (media diaria * 252)
     market_exp = data["ret_mkt"].mean() * 252
 
-    # 6. Rendimiento esperado de AAPL según CAPM
+    # 6. Rendimiento esperado de la acción según CAPM
     expected_return = rf_daily * 252 + beta * (market_exp - rf_daily * 252)
 
     # Calculando el Monte Carlo
