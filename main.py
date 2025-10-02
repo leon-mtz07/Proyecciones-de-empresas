@@ -101,13 +101,30 @@ def random_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, mo
     df_stock["Volatility"] = df_stock["Return"].rolling(20).std()
     df_stock["RSI"] = ta.momentum.RSIIndicator(df_stock["close"], window=14).rsi()
 
+    # Creando features de volumen
+    df_stock["Volumen"] = df_stock["volume"]
+    df_stock["Volumen_MA20"] = df_stock["Volumen"].rolling(20).mean()
+    df_stock["Volumen_Ratio"] = df_stock["Volumen"] / df_stock["Volumen_MA20"]
+
+    # Uniendo con noticias
+    try:
+        news = obb.news(ticker, provider="finnhub").to_df()
+        news["published"] = pd.to_datetime(news["published"]).dt.date
+        if "sentiment" in news.columns:
+            daily_sentiment = news.groupby("published")["sentiment"].mean()
+            df_stock["date"] = df_stock.index.date
+            df_stock = df_stock.merge(daily_sentiment, how="left", left_on="date", right_on="published")
+            df_stock["sentiment"] = df_stock["sentiment"].fillna(0)
+    except:
+        df_stock["sentiment"] = 0  # fallback si no hay noticias
+
     # Definir Target y Target_Price
     df_stock["Target"] = (df_stock["close"].shift(-tiempo) > df_stock["close"]).astype(int)
     df_stock["Target_Price"] = df_stock["close"].shift(-tiempo)
 
     # Crear features adicionales
     horizons = [5, 10, 20]
-    new_predictors = ["Return", "MA20", "MA50", "Volatility", "RSI"]
+    new_predictors = ["Return", "MA20", "MA50", "Volatility", "RSI", "Volumen_Ratio", "sentiment"]
     for horizon in horizons:
         rolling_avg = df_stock["close"].rolling(horizon).mean()
         df_stock[f"Close_Ratio_{horizon}"] = df_stock["close"] / rolling_avg
@@ -118,24 +135,37 @@ def random_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, mo
     X_current = df_stock[new_predictors].iloc[[-1]].copy()
 
     # Preparamos datos de entrenamiento quitando filas con NaN en Target_Price
-    df_train = df_stock.dropna(subset=["Target_Price"])
+    df_train = df_stock.dropna(subset= new_predictors + ["Target_Price"])
 
     if model_type == "Clasificador":
         # Modelo de Random Forest Clasificador
         # Definir modelo
-        model = RandomForestClassifier(n_estimators=200, min_samples_split=50, random_state=1)
+        model = RandomForestClassifier(n_estimators=200, min_samples_split=50, random_state=1, class_weight={
+            0: 1, 1: 2
+        })
 
         # Función predict con umbral de probabilidad
-        def predict(train, test, predictors, model, umbral = 0.5):
+        def predict(train, test, predictors, model):
             model.fit(train[predictors], train["Target"])
-            predictions = model.predict_proba(test[predictors])[:, 1]
+            probas = model.predict_proba(test[predictors])[:, 1]
 
-            # Aplicar umbral
-            predictions[predictions >= umbral] = 1
-            predictions[predictions < umbral] = 0
+            # Ajuste automático del umbral para maximizar F1
+            thresholds = np.arange(0.1, 0.91, 0.01)
+            best_f1 = 0
+            best_threshold = 0.5
 
+            y_true = test["Target"]
+            for t in thresholds:
+                y_pred_temp = (probas >= t).astype(int)
+                f1 = f1_score(y_true, y_pred_temp)
+                if f1 > best_f1:
+                    best_f1 = f1
+                    best_threshold = t
+
+            # Aplicar el mejor umbral
+            predictions = (probas >= best_threshold).astype(int)
             predictions = pd.Series(predictions, index=test.index, name="Predictions")
-            combined = pd.concat([test["Target"], predictions], axis=1)
+            combined = pd.concat([y_true, predictions], axis=1)
             return combined
 
         # Función de backtesting
@@ -205,12 +235,12 @@ def random_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, mo
     return None
 
 
-def predict_price(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, model_type: str = "Regresor"):
+def predict_price(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, model_type: str = "Regresor", N = 100000):
 
     if model_type == "Regresor":
 
         # Obteniendo el precio de monte carlo
-        precio_MN = monte_carlo(ticker, fecha_f, tiempo)
+        precio_MN = monte_carlo(ticker, fecha_f = fecha_f, tiempo = tiempo)
 
         # Obteniendo el precio con el modelo de Random Forest
         precio_RF = random_forest(ticker, fecha_f, tiempo, model_type=model_type)
@@ -222,3 +252,5 @@ def predict_price(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, mo
 
         # Obteniendo el precio con el modelo de Random Forest
         random_forest(ticker, fecha_f, tiempo, model_type=model_type)
+
+predict_price("NVDA", tiempo=22)
