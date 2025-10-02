@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import date
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.metrics import mean_absolute_error, mean_squared_error, accuracy_score, classification_report
 from sklearn.model_selection import train_test_split
 import ta
 
@@ -105,8 +105,7 @@ def predict_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, m
 
     # Descargar datos históricos
     df_stock = obb.equity.price.historical(
-        ticker, start_date="2020-01-01", end_date=fecha_f, interval="1d", provider="yfinance"
-    ).to_df()
+        ticker, start_date="2020-01-01", end_date=fecha_f, interval="1d", provider="yfinance").to_df()
 
     # Guardamos el precio actual real
     current_price = df_stock["close"].iloc[-1]
