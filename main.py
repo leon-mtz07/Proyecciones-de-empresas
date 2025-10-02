@@ -1,10 +1,11 @@
 from openbb import obb
 import numpy as np
+import pandas as pd
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import date
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import train_test_split
 import ta
@@ -96,33 +97,33 @@ def monte_carlo(ticker: str, fecha_f = date.today(), N = 100000, tiempo : int = 
     plt.show()
 
 # Creando un modelo de machine learning para predecir el precio de una acción
-def predict_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22):
+def predict_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, model_type: str = "Regresor"):
     import warnings
 
     # Ignoramos warnings
     warnings.filterwarnings(action='ignore')
 
-    # 1️⃣ Descargar datos históricos
+    # Descargar datos históricos
     df_stock = obb.equity.price.historical(
         ticker, start_date="2020-01-01", end_date=fecha_f, interval="1d", provider="yfinance"
     ).to_df()
 
     # Guardamos el precio actual real
     current_price = df_stock["close"].iloc[-1]
-    print(f"Precio actual real: {current_price}")
+    print(f"Precio actual: {current_price}")
 
-    # 2️⃣ Crear variables/features
+    # Crear variables/features
     df_stock["Return"] = df_stock["close"].pct_change()
     df_stock["MA20"] = df_stock["close"].rolling(20).mean()
     df_stock["MA50"] = df_stock["close"].rolling(50).mean()
     df_stock["Volatility"] = df_stock["Return"].rolling(20).std()
     df_stock["RSI"] = ta.momentum.RSIIndicator(df_stock["close"], window=14).rsi()
 
-    # 3️⃣ Definir Target y Target_Price
+    # Definir Target y Target_Price
     df_stock["Target"] = (df_stock["close"].shift(-tiempo) > df_stock["close"]).astype(int)
     df_stock["Target_Price"] = df_stock["close"].shift(-tiempo)
 
-    # 4️⃣ Crear features adicionales
+    # Crear features adicionales
     horizons = [5, 10, 20]
     new_predictors = ["Return", "MA20", "MA50", "Volatility", "RSI"]
     for horizon in horizons:
@@ -131,36 +132,76 @@ def predict_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22):
         df_stock[f"Trend_{horizon}"] = df_stock["Target"].shift(1).rolling(horizon).sum()
         new_predictors += [f"Close_Ratio_{horizon}", f"Trend_{horizon}"]
 
-    # 5️⃣ Guardamos las features actuales para predicción (precio real)
+    # Guardamos las features actuales para predicción (precio real)
     X_current = df_stock[new_predictors].iloc[[-1]].copy()
 
-    # 6️⃣ Preparamos datos de entrenamiento quitando filas con NaN en Target_Price
+    # Preparamos datos de entrenamiento quitando filas con NaN en Target_Price
     df_train = df_stock.dropna(subset=["Target_Price"])
-    X_train = df_train[new_predictors]
-    y_train = df_train["Target_Price"]
 
-    # 7️⃣ Entrenar Random Forest Regressor
-    rf_reg = RandomForestRegressor(n_estimators=500, min_samples_split=50, random_state=1)
-    rf_reg.fit(X_train, y_train)
+    if model_type == "Clasificador":
+        # Modelo de Random Forest Clasificador
+        # Definir modelo
+        model = RandomForestClassifier(n_estimators=200, min_samples_split=50, random_state=1)
 
-    # 8️⃣ Predicción sobre la fila actual
-    predicted_price = rf_reg.predict(X_current)[0]
+        # Función predict con umbral de probabilidad
+        def predict(train, test, predictors, model, umbral = 0.5):
+            model.fit(train[predictors], train["Target"])
+            predictions = model.predict_proba(test[predictors])[:, 1]
 
-    # 9️⃣ Evaluación de error en test set
-    X_train_split, X_test_split, y_train_split, y_test_split = train_test_split(
-        X_train, y_train, test_size=0.2, shuffle=False
-    )
-    y_pred_split = rf_reg.predict(X_test_split)
-    mae = mean_absolute_error(y_test_split, y_pred_split)
-    rmse = np.sqrt(mean_squared_error(y_test_split, y_pred_split))
+            # Aplicar umbral
+            predictions[predictions >= umbral] = 1
+            predictions[predictions < umbral] = 0
 
-    # 10️⃣ Intervalos del 5%-95% usando predicciones de todos los árboles
-    all_tree_preds = np.array([tree.predict(X_current)[0] for tree in rf_reg.estimators_])
-    p05, p95 = np.percentile(all_tree_preds, [5, 95])
+            predictions = pd.Series(predictions, index=test.index, name="Predictions")
+            combined = pd.concat([test["Target"], predictions], axis=1)
+            return combined
 
-    # 11️⃣ Mostrar resultados
-    print(f"MAE: {mae:.2f}")
-    print(f"RMSE: {rmse:.2f}")
-    print(f"Precio actual usado para predicción: {current_price:.2f}")
-    print(f"Precio probable a {tiempo} días: {predicted_price:.2f}")
-    print(f"Rango probable de precio: ${p05:.2f} - ${p95:.2f}")
+        # Función de backtesting
+        def backtest(data, model, predictors, start=250, step=250):
+            all_predictions = []
+            for i in range(start, data.shape[0], step):
+                train = data.iloc[0:i].copy()
+                test = data.iloc[i:(i + step)].copy()
+                predictions = predict(train, test, predictors, model)
+                all_predictions.append(predictions)
+            return pd.concat(all_predictions)
+
+        # Ejecutar backtest
+        predictions = backtest(df_stock, model, new_predictors)
+
+        # Evaluar resultados
+        print("-------------------------------------------")
+        print("Puntuación del Clasificador:")
+        accuracy = (predictions["Target"] == predictions["Predictions"]).mean()
+        print("Accuracy del backtest:", accuracy)
+        print("-------------------------------------------")
+
+    elif model_type == "Regresor":
+        X_train = df_train[new_predictors]
+        y_train = df_train["Target_Price"]
+
+        # Entrenar Random Forest Regressor
+        rf_reg = RandomForestRegressor(n_estimators=500, min_samples_split=50, random_state=1)
+        rf_reg.fit(X_train, y_train)
+
+        # Predicción sobre la fila actual
+        predicted_price = rf_reg.predict(X_current)[0]
+
+        # Evaluación de error en test set
+        X_train_split, X_test_split, y_train_split, y_test_split = train_test_split(
+            X_train, y_train, test_size=0.2, shuffle=False
+        )
+        y_pred_split = rf_reg.predict(X_test_split)
+        mae = mean_absolute_error(y_test_split, y_pred_split)
+        rmse = np.sqrt(mean_squared_error(y_test_split, y_pred_split))
+
+        # Intervalos del 5%-95% usando predicciones de todos los árboles
+        all_tree_preds = np.array([tree.predict(X_current)[0] for tree in rf_reg.estimators_])
+        p05, p95 = np.percentile(all_tree_preds, [5, 95])
+
+        # Mostrar resultados
+        print(f"MAE: {mae:.2f}")
+        print(f"RMSE: {rmse:.2f}")
+        print(f"Precio actual usado para predicción: {current_price:.2f}")
+        print(f"Precio probable a {tiempo} días: {predicted_price:.2f}")
+        print(f"Rango probable de precio: ${p05:.2f} - ${p95:.2f}")
