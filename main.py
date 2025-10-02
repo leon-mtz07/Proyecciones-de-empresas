@@ -2,12 +2,10 @@ from openbb import obb
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-import matplotlib.pyplot as plt
-import seaborn as sns
 from datetime import date
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.metrics import mean_absolute_error, mean_squared_error, accuracy_score, classification_report
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.model_selection import TimeSeriesSplit
 import ta
 
 # Creación de la función monte carlo que se utilizará para predecir el precio de una acción
@@ -21,7 +19,7 @@ def monte_carlo(ticker: str, fecha_f = date.today(), N = 100000, tiempo : int = 
     """
 
     # Calculando la volatilidad anual
-    stock = obb.equity.price.historical(ticker, start_date="1900-01-01", end_date=fecha_f, interval="1d",
+    stock = obb.equity.price.historical(ticker, start_date="2020-01-01", end_date=fecha_f, interval="1d",
                                         provider="yfinance")
     df_stock = stock.to_df()
 
@@ -67,7 +65,7 @@ def monte_carlo(ticker: str, fecha_f = date.today(), N = 100000, tiempo : int = 
 
     # Simulación GBM (méto-do exacto para S_T):
     Z = np.random.normal(0, 1, size=N)
-    ST = df_stock['close'].iloc[-1] * np.exp((vol_anual - 0.5 * expected_return ** 2) * T + expected_return * np.sqrt(T) * Z)
+    ST = df_stock['close'].iloc[-1] * np.exp((expected_return - 0.5 * vol_anual ** 2) * T + vol_anual * np.sqrt(T) * Z)
 
     # Estadísticas
     mean_ST = ST.mean()
@@ -75,29 +73,10 @@ def monte_carlo(ticker: str, fecha_f = date.today(), N = 100000, tiempo : int = 
     p05, p95 = np.percentile(ST, [5, 95])
 
     # Resultados
-    print(f"Acción: {ticker}")
-    print(f"Precio Actual: {df_stock['close'].iloc[-1]}")
-    print(f"Rendimiento E[S_T] probable {np.round((mean_ST / df_stock['close'].iloc[-1] - 1) * 100, 2)}%")
-    print("E[S_T] ≈", mean_ST)
-    print("Mediana ≈", median_ST)
-    print("P5 ≈", p05, "  P95 ≈", p95)
-    print(f"Rendimiento P5: {np.round((p05 / df_stock['close'].iloc[-1] - 1) * 100, 2)}%", f" P95: {np.round((p95 / df_stock['close'].iloc[-1] - 1) * 100, 2)}%")
-
-    # Histograma
-    plt.title("")
-    sns.histplot(ST, bins=100, stat="density", alpha=0.7, color='green')
-    plt.axvline(np.percentile(ST, 5), color='blue', linestyle='--', label="90% info")
-    plt.axvline(mean_ST, color='k', linestyle='--', label=f"mean {mean_ST:.2f}")
-    plt.axvline(median_ST, color='r', linestyle=':', label=f"median {median_ST:.2f}")
-    plt.axvline(np.percentile(ST, 95), color='blue', linestyle='--')
-    plt.legend()
-    plt.xlabel("Precio S_T")
-    plt.ylabel("Densidad")
-    plt.title(f"Distribución simulada de S_T (1 mes) de la empresa {ticker}")
-    plt.show()
+    return mean_ST
 
 # Creando un modelo de machine learning para predecir el precio de una acción
-def predict_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, model_type: str = "Regresor"):
+def random_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, model_type: str = "Regresor"):
     import warnings
 
     # Ignoramos warnings
@@ -109,7 +88,10 @@ def predict_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, m
 
     # Guardamos el precio actual real
     current_price = df_stock["close"].iloc[-1]
+    print("------------------------")
+    print(f"Acción {ticker}")
     print(f"Precio actual: {current_price}")
+    print("------------------------")
 
     # Crear variables/features
     df_stock["Return"] = df_stock["close"].pct_change()
@@ -187,20 +169,41 @@ def predict_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, m
         predicted_price = rf_reg.predict(X_current)[0]
 
         # Evaluación de error en test set
-        X_train_split, X_test_split, y_train_split, y_test_split = train_test_split(
-            X_train, y_train, test_size=0.2, shuffle=False
-        )
-        y_pred_split = rf_reg.predict(X_test_split)
-        mae = mean_absolute_error(y_test_split, y_pred_split)
-        rmse = np.sqrt(mean_squared_error(y_test_split, y_pred_split))
+        tscv = TimeSeriesSplit(n_splits=5)
+
+        for train_index, test_index in tscv.split(X_train):
+            X_train_split, X_test_split = X_train.iloc[train_index], X_train.iloc[test_index]
+            y_train_split, y_test_split = y_train.iloc[train_index], y_train.iloc[test_index]
+
+            rf_reg.fit(X_train_split, y_train_split)
+            y_pred_split = rf_reg.predict(X_test_split)
+
+            mae = mean_absolute_error(y_test_split, y_pred_split)
+            rmse = np.sqrt(mean_squared_error(y_test_split, y_pred_split))
 
         # Intervalos del 5%-95% usando predicciones de todos los árboles
         all_tree_preds = np.array([tree.predict(X_current)[0] for tree in rf_reg.estimators_])
         p05, p95 = np.percentile(all_tree_preds, [5, 95])
 
         # Mostrar resultados
-        print(f"MAE: {mae:.2f}")
-        print(f"RMSE: {rmse:.2f}")
-        print(f"Precio actual usado para predicción: {current_price:.2f}")
-        print(f"Precio probable a {tiempo} días: {predicted_price:.2f}")
-        print(f"Rango probable de precio: ${p05:.2f} - ${p95:.2f}")
+        return predicted_price
+
+def predict_price(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, model_type: str = "Regresor"):
+
+    if model_type == "Regresor":
+
+        # Obteniendo el precio de monte carlo
+        precio_MN = monte_carlo(ticker, fecha_f, tiempo)
+
+        # Obteniendo el precio con el modelo de Random Forest
+        precio_RF = random_forest(ticker, fecha_f, tiempo, model_type=model_type)
+
+        print(f"Precio de monte carlo: {precio_MN}")
+        print(f"Precio del modelo de Random Forest: {precio_RF}")
+
+    elif model_type == "Clasificador":
+
+        # Obteniendo el precio con el modelo de Random Forest
+        precio_RF = random_forest(ticker, fecha_f, tiempo, model_type=model_type)
+
+        print(f"Precio del modelo de Random Forest: {precio_RF}")
