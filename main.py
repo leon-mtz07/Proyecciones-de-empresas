@@ -4,6 +4,10 @@ import statsmodels.api as sm
 import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import date
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.model_selection import train_test_split
+import ta
 
 # Creación de la función monte carlo que se utilizará para predecir el precio de una acción
 def monte_carlo(ticker: str, fecha_f = date.today(), N = 100000, tiempo : int = 22):
@@ -90,3 +94,73 @@ def monte_carlo(ticker: str, fecha_f = date.today(), N = 100000, tiempo : int = 
     plt.ylabel("Densidad")
     plt.title(f"Distribución simulada de S_T (1 mes) de la empresa {ticker}")
     plt.show()
+
+# Creando un modelo de machine learning para predecir el precio de una acción
+def predict_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22):
+    import warnings
+
+    # Ignoramos warnings
+    warnings.filterwarnings(action='ignore')
+
+    # 1️⃣ Descargar datos históricos
+    df_stock = obb.equity.price.historical(
+        ticker, start_date="2020-01-01", end_date=fecha_f, interval="1d", provider="yfinance"
+    ).to_df()
+
+    # Guardamos el precio actual real
+    current_price = df_stock["close"].iloc[-1]
+    print(f"Precio actual real: {current_price}")
+
+    # 2️⃣ Crear variables/features
+    df_stock["Return"] = df_stock["close"].pct_change()
+    df_stock["MA20"] = df_stock["close"].rolling(20).mean()
+    df_stock["MA50"] = df_stock["close"].rolling(50).mean()
+    df_stock["Volatility"] = df_stock["Return"].rolling(20).std()
+    df_stock["RSI"] = ta.momentum.RSIIndicator(df_stock["close"], window=14).rsi()
+
+    # 3️⃣ Definir Target y Target_Price
+    df_stock["Target"] = (df_stock["close"].shift(-tiempo) > df_stock["close"]).astype(int)
+    df_stock["Target_Price"] = df_stock["close"].shift(-tiempo)
+
+    # 4️⃣ Crear features adicionales
+    horizons = [5, 10, 20]
+    new_predictors = ["Return", "MA20", "MA50", "Volatility", "RSI"]
+    for horizon in horizons:
+        rolling_avg = df_stock["close"].rolling(horizon).mean()
+        df_stock[f"Close_Ratio_{horizon}"] = df_stock["close"] / rolling_avg
+        df_stock[f"Trend_{horizon}"] = df_stock["Target"].shift(1).rolling(horizon).sum()
+        new_predictors += [f"Close_Ratio_{horizon}", f"Trend_{horizon}"]
+
+    # 5️⃣ Guardamos las features actuales para predicción (precio real)
+    X_current = df_stock[new_predictors].iloc[[-1]].copy()
+
+    # 6️⃣ Preparamos datos de entrenamiento quitando filas con NaN en Target_Price
+    df_train = df_stock.dropna(subset=["Target_Price"])
+    X_train = df_train[new_predictors]
+    y_train = df_train["Target_Price"]
+
+    # 7️⃣ Entrenar Random Forest Regressor
+    rf_reg = RandomForestRegressor(n_estimators=500, min_samples_split=50, random_state=1)
+    rf_reg.fit(X_train, y_train)
+
+    # 8️⃣ Predicción sobre la fila actual
+    predicted_price = rf_reg.predict(X_current)[0]
+
+    # 9️⃣ Evaluación de error en test set
+    X_train_split, X_test_split, y_train_split, y_test_split = train_test_split(
+        X_train, y_train, test_size=0.2, shuffle=False
+    )
+    y_pred_split = rf_reg.predict(X_test_split)
+    mae = mean_absolute_error(y_test_split, y_pred_split)
+    rmse = np.sqrt(mean_squared_error(y_test_split, y_pred_split))
+
+    # 10️⃣ Intervalos del 5%-95% usando predicciones de todos los árboles
+    all_tree_preds = np.array([tree.predict(X_current)[0] for tree in rf_reg.estimators_])
+    p05, p95 = np.percentile(all_tree_preds, [5, 95])
+
+    # 11️⃣ Mostrar resultados
+    print(f"MAE: {mae:.2f}")
+    print(f"RMSE: {rmse:.2f}")
+    print(f"Precio actual usado para predicción: {current_price:.2f}")
+    print(f"Precio probable a {tiempo} días: {predicted_price:.2f}")
+    print(f"Rango probable de precio: ${p05:.2f} - ${p95:.2f}")
