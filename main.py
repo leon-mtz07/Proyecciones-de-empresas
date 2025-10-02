@@ -4,7 +4,8 @@ import pandas as pd
 import statsmodels.api as sm
 from datetime import date
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.metrics import (mean_absolute_error, mean_squared_error, accuracy_score, precision_score, recall_score,
+                             f1_score, confusion_matrix)
 from sklearn.model_selection import TimeSeriesSplit
 import ta
 
@@ -153,8 +154,15 @@ def random_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, mo
         # Evaluar resultados
         print("-------------------------------------------")
         print("Puntuación del Clasificador:")
-        accuracy = (predictions["Target"] == predictions["Predictions"]).mean()
-        print("Accuracy del backtest:", accuracy)
+
+        y_true = predictions["Target"]
+        y_pred = predictions["Predictions"]
+
+        print("Accuracy del backtest: ", accuracy_score(y_true, y_pred))
+        print("Precision del backtest: ", precision_score(y_true, y_pred))
+        print("Recall: ", recall_score(y_true, y_pred))
+        print("F1 Score: ", f1_score(y_true, y_pred))
+        print("Matriz de confusión:\n", confusion_matrix(y_true, y_pred))
         print("-------------------------------------------")
 
     elif model_type == "Regresor":
@@ -169,6 +177,7 @@ def random_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, mo
         predicted_price = rf_reg.predict(X_current)[0]
 
         # Evaluación de error en test set
+        mae_list, rmse_list = [], []
         tscv = TimeSeriesSplit(n_splits=5)
 
         for train_index, test_index in tscv.split(X_train):
@@ -178,15 +187,23 @@ def random_forest(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, mo
             rf_reg.fit(X_train_split, y_train_split)
             y_pred_split = rf_reg.predict(X_test_split)
 
-            mae = mean_absolute_error(y_test_split, y_pred_split)
-            rmse = np.sqrt(mean_squared_error(y_test_split, y_pred_split))
+            mae_list.append(mean_absolute_error(y_test_split, y_pred_split))
+            rmse_list.append(np.sqrt(mean_squared_error(y_test_split, y_pred_split)))
 
         # Intervalos del 5%-95% usando predicciones de todos los árboles
         all_tree_preds = np.array([tree.predict(X_current)[0] for tree in rf_reg.estimators_])
         p05, p95 = np.percentile(all_tree_preds, [5, 95])
 
+        print("-------------------------------------------")
+        print("Puntuación del Regressor:")
+        print("MAE promedio:", np.mean(mae_list))
+        print("RMSE promedio:", np.mean(rmse_list))
+        print("-------------------------------------------")
+
         # Mostrar resultados
         return predicted_price
+    return None
+
 
 def predict_price(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, model_type: str = "Regresor"):
 
@@ -204,6 +221,4 @@ def predict_price(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, mo
     elif model_type == "Clasificador":
 
         # Obteniendo el precio con el modelo de Random Forest
-        precio_RF = random_forest(ticker, fecha_f, tiempo, model_type=model_type)
-
-        print(f"Precio del modelo de Random Forest: {precio_RF}")
+        random_forest(ticker, fecha_f, tiempo, model_type=model_type)
