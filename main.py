@@ -36,7 +36,7 @@ def monte_carlo(ticker: str, fecha_f = date.today(), N = 100000, tiempo : int = 
 
     # Calculamos el rendimiento esperado
     # 1. Obtener precios históricos del S&P 500 (VOO)
-    sp500 = obb.equity.price.historical("VOO", start_date="1900-01-01", end_date=fecha_f, provider="yfinance").to_df()
+    sp500 = obb.equity.price.historical("VOO", start_date="2020-01-01", end_date=fecha_f, provider="yfinance").to_df()
 
     # 2. Calcular rendimientos diarios logarítmicos
     df_stock["ret"] = np.log(df_stock["close"] / df_stock["close"].shift(1))
@@ -252,5 +252,3 @@ def predict_price(ticker: str, fecha_f: str = date.today(), tiempo: int = 22, mo
 
         # Obteniendo el precio con el modelo de Random Forest
         random_forest(ticker, fecha_f, tiempo, model_type=model_type)
-
-predict_price("NVDA", tiempo=22)
